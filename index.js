@@ -1,5 +1,3 @@
-import fetch from "node-fetch";
-
 const BASE = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php";
 
 async function getWeather() {
