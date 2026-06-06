@@ -4,7 +4,8 @@
   "description": "Fetch current Hong Kong weather from the HK Observatory Open API",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test"
   },
   "type": "module"
 }
