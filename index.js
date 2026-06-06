@@ -1,5 +1,3 @@
-import fetch from "node-fetch";
-
 const BASE = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php";
 
 async function getWeather() {
@@ -18,7 +16,7 @@ async function getWeather() {
   return { current, forecast, warning };
 }
 
-function formatWeather({ current, forecast, warning }) {
+export function formatWeather({ current, forecast, warning }) {
   const temp = current.temperature?.data?.find((d) => d.place === "Hong Kong Observatory");
   const humidity = current.humidity?.data?.[0];
   const rainfall = current.rainfall?.data?.find((d) => d.place === "Hong Kong Observatory");
@@ -63,4 +61,7 @@ async function main() {
   }
 }
 
-main();
+// Only run when executed directly (not when imported by tests)
+if (process.argv[1] === new URL(import.meta.url).pathname) {
+  main();
+}
