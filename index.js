@@ -62,9 +62,7 @@ export function formatWeather({ current, forecast, warning }) {
     divider,
     clr(c.bold + c.white, "  Forecast"),
     "",
-    forecast.generalSituation
-      ? wrapText(`  ${forecast.generalSituation}`, width)
-      : "",
+    wrapText(`  ${forecast.generalSituation || "N/A"}`, width),
     "",
     forecast.forecastDesc
       ? wrapText(`  🔮 ${forecast.forecastDesc}`, width)
