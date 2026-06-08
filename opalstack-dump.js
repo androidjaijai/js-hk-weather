@@ -2,64 +2,64 @@
 /**
  * opalstack-dump.js
  *
- * Dumps Opalstack account data and shows associations between:
- *   sites → domains → apps → osusers → databases
+ * Dumps Opalstack account data as a visual tree:
+ *
+ *   SITE: mysite
+ *   ├── 🌐 mysite.com
+ *   ├── 🌐 www.mysite.com
+ *   ├── [/]      myapp  (wordpress)  👤 eddie  🖥 us1.opalstack.com
+ *   │            └── 🗄 mydb  [MariaDB]  dbuser: mydb_user
+ *   └── [/blog]  blog   (static)    👤 eddie
  *
  * Usage:
- *   OPALSTACK_TOKEN=<your-api-token> node opalstack-dump.js
- *   node opalstack-dump.js --token <your-api-token>
- *   node opalstack-dump.js --json   # output raw JSON instead of the tree view
+ *   OPALSTACK_TOKEN=<token> node opalstack-dump.js
+ *   node opalstack-dump.js --token <token>
+ *   node opalstack-dump.js --json    # raw JSON dump
  */
 
 const BASE = "https://my.opalstack.com/api/v1";
 
 const c = {
-  reset:  "\x1b[0m",
-  bold:   "\x1b[1m",
-  dim:    "\x1b[2m",
-  cyan:   "\x1b[36m",
-  yellow: "\x1b[33m",
-  green:  "\x1b[32m",
-  red:    "\x1b[31m",
-  blue:   "\x1b[34m",
-  magenta:"\x1b[35m",
-  white:  "\x1b[97m",
+  reset:   "\x1b[0m",
+  bold:    "\x1b[1m",
+  dim:     "\x1b[2m",
+  cyan:    "\x1b[36m",
+  yellow:  "\x1b[33m",
+  green:   "\x1b[32m",
+  red:     "\x1b[31m",
+  blue:    "\x1b[34m",
+  magenta: "\x1b[35m",
+  white:   "\x1b[97m",
+  gray:    "\x1b[90m",
 };
-const clr = (col, text) => `${col}${text}${c.reset}`;
+const clr  = (col, text) => `${col}${text}${c.reset}`;
+const dim  = (text) => clr(c.dim + c.gray, text);
+const bold = (text) => clr(c.bold + c.white, text);
 
-// ---------------------------------------------------------------------------
-// CLI args
-// ---------------------------------------------------------------------------
-const args = process.argv.slice(2);
-const jsonMode   = args.includes("--json");
-const tokenFlag  = args.indexOf("--token");
-const token      = tokenFlag !== -1 ? args[tokenFlag + 1] : process.env.OPALSTACK_TOKEN;
+// ── CLI args ─────────────────────────────────────────────────────────────────
+const args      = process.argv.slice(2);
+const jsonMode  = args.includes("--json");
+const tokenFlag = args.indexOf("--token");
+const token     = tokenFlag !== -1 ? args[tokenFlag + 1] : process.env.OPALSTACK_TOKEN;
 
 if (!token) {
-  console.error(clr(c.red, "Error: Opalstack API token required."));
+  console.error(clr(c.red, "Error: API token required."));
   console.error("  Set OPALSTACK_TOKEN env var, or pass --token <token>");
   process.exit(1);
 }
 
-// ---------------------------------------------------------------------------
-// API helpers
-// ---------------------------------------------------------------------------
+// ── API ───────────────────────────────────────────────────────────────────────
 async function apiFetch(path) {
   const res = await fetch(`${BASE}${path}`, {
-    headers: {
-      Authorization: `Token ${token}`,
-      Accept: "application/json",
-    },
+    headers: { Authorization: `Token ${token}`, Accept: "application/json" },
   });
-  if (!res.ok) {
-    throw new Error(`GET ${path} → HTTP ${res.status} ${res.statusText}`);
-  }
+  if (!res.ok) throw new Error(`GET ${path} → HTTP ${res.status} ${res.statusText}`);
   return res.json();
 }
 
 async function fetchAll() {
-  process.stderr.write(clr(c.dim, "Fetching Opalstack data...\n"));
-  const [sites, apps, domains, osusers, mysqlDbs, mysqlUsers, pgsqlDbs, pgsqlUsers] =
+  process.stderr.write(dim("Fetching Opalstack data…\n"));
+  const [sites, apps, domains, osusers, mariaDbs, mariaUsers, psqlDbs, psqlUsers] =
     await Promise.all([
       apiFetch("/site/list/"),
       apiFetch("/app/list/"),
@@ -70,204 +70,224 @@ async function fetchAll() {
       apiFetch("/psqldb/list/"),
       apiFetch("/psqluser/list/"),
     ]);
-  return { sites, apps, domains, osusers, mysqlDbs, mysqlUsers, pgsqlDbs, pgsqlUsers };
+  return { sites, apps, domains, osusers, mariaDbs, mariaUsers, psqlDbs, psqlUsers };
 }
 
-// ---------------------------------------------------------------------------
-// Index builders
-// ---------------------------------------------------------------------------
-function byId(arr) {
-  return Object.fromEntries(arr.map((x) => [x.id, x]));
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const byId     = (arr) => Object.fromEntries(arr.map((x) => [x.id, x]));
+const groupBy  = (arr, fn) => {
+  const m = {};
+  for (const item of arr) {
+    const k = fn(item);
+    if (k == null) continue;
+    (m[k] = m[k] || []).push(item);
+  }
+  return m;
+};
 
-// ---------------------------------------------------------------------------
-// Tree renderer
-// ---------------------------------------------------------------------------
+// ── Tree printer ──────────────────────────────────────────────────────────────
 function renderTree(data) {
-  const { sites, apps, domains, osusers, mysqlDbs, mysqlUsers, pgsqlDbs, pgsqlUsers } = data;
+  const { sites, apps, domains, osusers, mariaDbs, mariaUsers, psqlDbs, psqlUsers } = data;
 
-  const appIdx      = byId(apps);
-  const domainIdx   = byId(domains);
-  const osuserIdx   = byId(osusers);
-  const mysqlDbIdx  = byId(mysqlDbs);
-  const mysqlUIdx   = byId(mysqlUsers);
-  const pgsqlDbIdx  = byId(pgsqlDbs);
-  const pgsqlUIdx   = byId(pgsqlUsers);
+  const appIdx     = byId(apps);
+  const domainIdx  = byId(domains);
+  const osuserIdx  = byId(osusers);
 
-  // Map osuser → databases
-  const mysqlByOsuser  = groupBy(mysqlDbs,  (d) => d.server); // server = osuser server; keyed by db.id is not osuser
-  // Databases don't directly store osuser id — they store dbusers, dbusers store osuser
-  // Build: osuser_id → [db records]
-  const mysqlUserByOsuser  = groupBy(mysqlUsers,  (u) => u.osuser);
-  const pgsqlUserByOsuser  = groupBy(pgsqlUsers,  (u) => u.osuser);
+  // dbuser → dbs  (many-to-many via db.dbusers[])
+  const mariaDbByUserId = {};
+  for (const db of mariaDbs)
+    for (const uid of (db.dbusers || []))
+      (mariaDbByUserId[uid] = mariaDbByUserId[uid] || []).push(db);
 
-  const mysqlDbByUser = groupBy(mysqlDbs,  (d) => null); // will build per user below
-  const pgsqlDbByUser = groupBy(pgsqlDbs,  (d) => null);
+  const psqlDbByUserId = {};
+  for (const db of psqlDbs)
+    for (const uid of (db.dbusers || []))
+      (psqlDbByUserId[uid] = psqlDbByUserId[uid] || []).push(db);
 
-  // dbuser → dbs (many-to-many via dbusers array on db)
-  const mysqlDbByUserId  = {};
-  for (const db of mysqlDbs) {
-    for (const uid of (db.dbusers || [])) {
-      (mysqlDbByUserId[uid] = mysqlDbByUserId[uid] || []).push(db);
-    }
-  }
-  const pgsqlDbByUserId  = {};
-  for (const db of pgsqlDbs) {
-    for (const uid of (db.dbusers || [])) {
-      (pgsqlDbByUserId[uid] = pgsqlDbByUserId[uid] || []).push(db);
-    }
-  }
+  // osuser → dbusers
+  const mariaUserByOsuser = groupBy(mariaUsers, (u) => u.osuser);
+  const psqlUserByOsuser  = groupBy(psqlUsers,  (u) => u.osuser);
 
-  // osuser → all associated dbs (via dbusers that belong to this osuser)
   function dbsForOsuser(osuserId) {
-    const mysql = (mysqlUserByOsuser[osuserId] || [])
-      .flatMap((u) => (mysqlDbByUserId[u.id] || []).map((db) => ({ type: "MariaDB", db, user: u })));
-    const pgsql = (pgsqlUserByOsuser[osuserId] || [])
-      .flatMap((u) => (pgsqlDbByUserId[u.id] || []).map((db) => ({ type: "PgSQL", db, user: u })));
-    return [...mysql, ...pgsql];
+    const maria = (mariaUserByOsuser[osuserId] || [])
+      .flatMap((u) => (mariaDbByUserId[u.id] || []).map((db) => ({ kind: "MariaDB", db, dbuser: u })));
+    const psql  = (psqlUserByOsuser[osuserId] || [])
+      .flatMap((u) => (psqlDbByUserId[u.id]  || []).map((db) => ({ kind: "PgSQL",   db, dbuser: u })));
+    const seen = new Set();
+    return [...maria, ...psql].filter(({ kind, db }) => {
+      const k = `${kind}:${db.id}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
   }
 
-  const lines = [];
-  const w = process.stdout.columns || 80;
-  const div = clr(c.dim, "─".repeat(w));
+  const out = [];
+  const W   = process.stdout.columns || 90;
 
-  lines.push(div);
-  lines.push(clr(c.bold + c.cyan, "  Opalstack Account Dump"));
-  lines.push(clr(c.dim, `  ${new Date().toISOString()}`));
-  lines.push(div);
+  // header
+  out.push("");
+  out.push(clr(c.bold + c.cyan, "  Opalstack Account  ") + dim(new Date().toISOString()));
+  out.push(dim("  " + "─".repeat(W - 2)));
 
-  // ── Sites ──────────────────────────────────────────────────────────────
-  lines.push("");
-  lines.push(clr(c.bold + c.white, `  SITES (${sites.length})`));
-
-  for (const site of sites) {
-    lines.push("");
-    lines.push(`  ${clr(c.bold + c.green, "◉ " + site.name)} ${clr(c.dim, `[id:${site.id}]`)}`);
-
-    const siteApps = (site.apps || []);
-
-    // Domains on this site
-    const siteDomains = (site.domains || []).map((did) => domainIdx[did]).filter(Boolean);
-    if (siteDomains.length) {
-      lines.push(`    ${clr(c.cyan, "Domains:")}`);
-      for (const d of siteDomains) {
-        lines.push(`      ${clr(c.yellow, "⌂ " + d.name)} ${clr(c.dim, `[id:${d.id}]`)}`);
-      }
-    }
-
-    // Apps mounted on this site  (site.apps is [{app, path}] or [id] depending on API version)
-    if (siteApps.length) {
-      lines.push(`    ${clr(c.cyan, "Apps:")}`);
-      for (const entry of siteApps) {
-        const appId   = entry.app ?? entry;
-        const appPath = entry.path ?? "/";
-        const app = appIdx[appId];
-        if (!app) continue;
-
-        const osuser = osuserIdx[app.osuser];
-        lines.push(
-          `      ${clr(c.magenta, "▸ " + app.name)} ${clr(c.dim, `[${app.type}]`)} ` +
-          `${clr(c.dim, `path:${appPath}`)} ${clr(c.dim, `[id:${app.id}]`)}`
-        );
-        if (osuser) {
-          lines.push(`        ${clr(c.blue, "user: " + osuser.name)} ${clr(c.dim, `[id:${osuser.id}]`)}`);
-
-          const dbs = dbsForOsuser(osuser.id);
-          if (dbs.length) {
-            lines.push(`        ${clr(c.cyan, "Databases:")}`);
-            const seen = new Set();
-            for (const { type, db, user } of dbs) {
-              const key = `${type}:${db.id}`;
-              if (seen.has(key)) continue;
-              seen.add(key);
-              lines.push(
-                `          ${clr(c.yellow, "⊞ " + db.name)} ${clr(c.dim, `[${type}]`)} ` +
-                `${clr(c.dim, `dbuser:${user.name}`)} ${clr(c.dim, `[id:${db.id}]`)}`
-              );
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // ── Orphan apps (not mounted on any site) ──────────────────────────────
+  // ── SITES ──────────────────────────────────────────────────────────────────
   const mountedAppIds = new Set(
     sites.flatMap((s) => (s.apps || []).map((e) => e.app ?? e))
   );
-  const orphanApps = apps.filter((a) => !mountedAppIds.has(a.id));
-  if (orphanApps.length) {
-    lines.push("");
-    lines.push(clr(c.bold + c.white, `  UNMOUNTED APPS (${orphanApps.length})`));
-    for (const app of orphanApps) {
-      const osuser = osuserIdx[app.osuser];
-      lines.push(`  ${clr(c.magenta, "▸ " + app.name)} ${clr(c.dim, `[${app.type}]`)} ${clr(c.dim, `[id:${app.id}]`)}`);
-      if (osuser) {
-        lines.push(`    ${clr(c.blue, "user: " + osuser.name)}`);
-        const dbs = dbsForOsuser(osuser.id);
-        if (dbs.length) {
-          const seen = new Set();
-          for (const { type, db, user } of dbs) {
-            const key = `${type}:${db.id}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            lines.push(`    ${clr(c.yellow, "⊞ " + db.name)} ${clr(c.dim, `[${type}]`)} ${clr(c.dim, `dbuser:${user.name}`)}`);
+
+  for (const site of sites) {
+    out.push("");
+    out.push(
+      clr(c.bold + c.green, `  ┌─ SITE: ${site.name}`) +
+      dim(`  [${site.ip ?? ""}  id:${site.id}]`)
+    );
+
+    const siteItems = [];
+
+    // domains
+    const siteDomains = (site.domains || []).map((id) => domainIdx[id]).filter(Boolean);
+    for (const d of siteDomains)
+      siteItems.push({ kind: "domain", d });
+
+    // apps
+    const siteApps = (site.apps || []);
+    for (const entry of siteApps) {
+      const appId  = entry.app  ?? entry;
+      const path   = entry.path ?? "/";
+      const app    = appIdx[appId];
+      if (app) siteItems.push({ kind: "app", app, path });
+    }
+
+    // render items with tree lines
+    for (let i = 0; i < siteItems.length; i++) {
+      const item    = siteItems[i];
+      const isLast  = i === siteItems.length - 1;
+      const branch  = isLast ? "  └──" : "  ├──";
+      const cont    = isLast ? "      " : "  │   ";
+
+      if (item.kind === "domain") {
+        out.push(
+          clr(c.yellow, branch + " 🌐 " + item.d.name) +
+          dim(`  [id:${item.d.id}]`)
+        );
+      } else {
+        const { app, path } = item;
+        const osuser = osuserIdx[app.osuser];
+        const userName = osuser ? clr(c.blue, "👤 " + osuser.name) : "";
+        const server   = osuser ? dim("  @ " + osuser.server) : "";
+        out.push(
+          clr(c.magenta, `${branch} [${path}]`) +
+          `  ${clr(c.bold + c.white, app.name)}` +
+          dim(`  (${app.type})`) +
+          `  ${userName}${server}`
+        );
+
+        if (osuser) {
+          const dbs = dbsForOsuser(osuser.id);
+          for (let j = 0; j < dbs.length; j++) {
+            const { kind, db, dbuser } = dbs[j];
+            const dbLast   = j === dbs.length - 1;
+            const dbBranch = cont + (dbLast ? "└── " : "├── ");
+            const badge    = kind === "MariaDB"
+              ? clr(c.cyan,   "🗄 ")
+              : clr(c.green,  "🐘 ");
+            out.push(
+              dim(dbBranch) +
+              badge + clr(c.yellow, db.name) +
+              dim(`  [${kind}]  dbuser: ${dbuser.name}  server: ${db.server}  id:${db.id}`)
+            );
           }
         }
       }
     }
+
+    out.push(clr(c.dim, "  └" + "─".repeat(W - 3)));
   }
 
-  // ── Orphan domains (not attached to any site) ──────────────────────────
-  const usedDomainIds = new Set(sites.flatMap((s) => s.domains || []));
-  const orphanDomains = domains.filter((d) => !usedDomainIds.has(d.id));
-  if (orphanDomains.length) {
-    lines.push("");
-    lines.push(clr(c.bold + c.white, `  UNATTACHED DOMAINS (${orphanDomains.length})`));
-    for (const d of orphanDomains) {
-      lines.push(`  ${clr(c.yellow, "⌂ " + d.name)} ${clr(c.dim, `[id:${d.id}]`)}`);
+  // ── UNMOUNTED APPS ─────────────────────────────────────────────────────────
+  const orphanApps = apps.filter((a) => !mountedAppIds.has(a.id));
+  if (orphanApps.length) {
+    out.push("");
+    out.push(clr(c.bold + c.red, `  ┌─ UNMOUNTED APPS (${orphanApps.length})`));
+    for (let i = 0; i < orphanApps.length; i++) {
+      const app    = orphanApps[i];
+      const isLast = i === orphanApps.length - 1;
+      const branch = isLast ? "  └──" : "  ├──";
+      const cont   = isLast ? "      " : "  │   ";
+      const osuser = osuserIdx[app.osuser];
+      out.push(
+        clr(c.magenta, `${branch} ${app.name}`) +
+        dim(`  (${app.type})`) +
+        (osuser ? `  ${clr(c.blue, "👤 " + osuser.name)}` : "")
+      );
+      if (osuser) {
+        const dbs = dbsForOsuser(osuser.id);
+        for (let j = 0; j < dbs.length; j++) {
+          const { kind, db, dbuser } = dbs[j];
+          const dbLast   = j === dbs.length - 1;
+          const dbBranch = cont + (dbLast ? "└── " : "├── ");
+          const badge    = kind === "MariaDB" ? clr(c.cyan, "🗄 ") : clr(c.green, "🐘 ");
+          out.push(
+            dim(dbBranch) +
+            badge + clr(c.yellow, db.name) +
+            dim(`  [${kind}]  dbuser: ${dbuser.name}`)
+          );
+        }
+      }
     }
+    out.push(dim("  └" + "─".repeat(W - 3)));
   }
 
-  // ── OS Users summary ───────────────────────────────────────────────────
-  lines.push("");
-  lines.push(clr(c.bold + c.white, `  OS USERS (${osusers.length})`));
-  for (const u of osusers) {
-    lines.push(`  ${clr(c.blue, "● " + u.name)} ${clr(c.dim, `server:${u.server} [id:${u.id}]`)}`);
+  // ── UNATTACHED DOMAINS ─────────────────────────────────────────────────────
+  const usedDomainIds  = new Set(sites.flatMap((s) => s.domains || []));
+  const orphanDomains  = domains.filter((d) => !usedDomainIds.has(d.id));
+  if (orphanDomains.length) {
+    out.push("");
+    out.push(clr(c.bold + c.yellow, `  ┌─ UNATTACHED DOMAINS (${orphanDomains.length})`));
+    for (let i = 0; i < orphanDomains.length; i++) {
+      const d      = orphanDomains[i];
+      const branch = i === orphanDomains.length - 1 ? "  └──" : "  ├──";
+      out.push(clr(c.yellow, `${branch} 🌐 ${d.name}`) + dim(`  [id:${d.id}]`));
+    }
+    out.push(dim("  └" + "─".repeat(W - 3)));
   }
 
-  // ── Database summary ───────────────────────────────────────────────────
-  const allDbs = [
-    ...mysqlDbs.map((d) => ({ ...d, dbType: "MariaDB" })),
-    ...pgsqlDbs.map((d) => ({ ...d, dbType: "PgSQL" })),
-  ];
-  lines.push("");
-  lines.push(clr(c.bold + c.white, `  DATABASES (${allDbs.length})`));
-  for (const db of allDbs) {
-    lines.push(
-      `  ${clr(c.yellow, "⊞ " + db.name)} ${clr(c.dim, `[${db.dbType}]`)} ` +
-      `${clr(c.dim, `server:${db.server} [id:${db.id}]`)}`
+  // ── OS USERS ───────────────────────────────────────────────────────────────
+  out.push("");
+  out.push(clr(c.bold + c.blue, `  ┌─ OS USERS (${osusers.length})`));
+  for (let i = 0; i < osusers.length; i++) {
+    const u      = osusers[i];
+    const branch = i === osusers.length - 1 ? "  └──" : "  ├──";
+    out.push(
+      clr(c.blue, `${branch} 👤 ${u.name}`) +
+      dim(`  @ ${u.server}  [id:${u.id}]`)
     );
   }
+  out.push(dim("  └" + "─".repeat(W - 3)));
 
-  lines.push("");
-  lines.push(div);
-  return lines.join("\n");
-}
-
-function groupBy(arr, keyFn) {
-  const map = {};
-  for (const item of arr) {
-    const k = keyFn(item);
-    if (k == null) continue;
-    (map[k] = map[k] || []).push(item);
+  // ── DATABASES ──────────────────────────────────────────────────────────────
+  const allDbs = [
+    ...mariaDbs.map((d) => ({ ...d, kind: "MariaDB" })),
+    ...psqlDbs.map((d)  => ({ ...d, kind: "PgSQL"   })),
+  ];
+  out.push("");
+  out.push(clr(c.bold + c.cyan, `  ┌─ DATABASES (${allDbs.length})`));
+  for (let i = 0; i < allDbs.length; i++) {
+    const db     = allDbs[i];
+    const branch = i === allDbs.length - 1 ? "  └──" : "  ├──";
+    const badge  = db.kind === "MariaDB" ? clr(c.cyan, "🗄 ") : clr(c.green, "🐘 ");
+    out.push(
+      dim(branch + " ") + badge + clr(c.yellow, db.name) +
+      dim(`  [${db.kind}]  @ ${db.server}  [id:${db.id}]`)
+    );
   }
-  return map;
+  out.push(dim("  └" + "─".repeat(W - 3)));
+
+  out.push("");
+  return out.join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
+// ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
   try {
     const data = await fetchAll();
