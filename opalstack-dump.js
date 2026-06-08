@@ -65,10 +65,10 @@ async function fetchAll() {
       apiFetch("/app/list/"),
       apiFetch("/domain/list/"),
       apiFetch("/osuser/list/"),
-      apiFetch("/mysqldb/list/"),
-      apiFetch("/mysqluser/list/"),
-      apiFetch("/pgsqldb/list/"),
-      apiFetch("/pgsqluser/list/"),
+      apiFetch("/mariadb/list/"),
+      apiFetch("/mariauser/list/"),
+      apiFetch("/psqldb/list/"),
+      apiFetch("/psqluser/list/"),
     ]);
   return { sites, apps, domains, osusers, mysqlDbs, mysqlUsers, pgsqlDbs, pgsqlUsers };
 }
@@ -121,7 +121,7 @@ function renderTree(data) {
   // osuser → all associated dbs (via dbusers that belong to this osuser)
   function dbsForOsuser(osuserId) {
     const mysql = (mysqlUserByOsuser[osuserId] || [])
-      .flatMap((u) => (mysqlDbByUserId[u.id] || []).map((db) => ({ type: "MySQL", db, user: u })));
+      .flatMap((u) => (mysqlDbByUserId[u.id] || []).map((db) => ({ type: "MariaDB", db, user: u })));
     const pgsql = (pgsqlUserByOsuser[osuserId] || [])
       .flatMap((u) => (pgsqlDbByUserId[u.id] || []).map((db) => ({ type: "PgSQL", db, user: u })));
     return [...mysql, ...pgsql];
@@ -238,7 +238,7 @@ function renderTree(data) {
 
   // ── Database summary ───────────────────────────────────────────────────
   const allDbs = [
-    ...mysqlDbs.map((d) => ({ ...d, dbType: "MySQL" })),
+    ...mysqlDbs.map((d) => ({ ...d, dbType: "MariaDB" })),
     ...pgsqlDbs.map((d) => ({ ...d, dbType: "PgSQL" })),
   ];
   lines.push("");
